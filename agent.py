@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
 JaredCodingAgent - Polling daemon
-Watches GitHub for issues labeled "Ready", runs Claude Code to implement them.
+Watches GitHub for issues labeled "Ready", then delegates to Claude Code
+running on the host machine via SSH.
+
+NOTE: This uses SSH delegation to the host temporarily because Claude Code
+is authenticated via Max subscription (browser OAuth) on the host user session.
+TODO: Migrate to API key authentication so Claude Code runs inside the container.
 """
 
 import os
@@ -18,17 +23,16 @@ log = logging.getLogger(__name__)
 
 # Config from environment
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "YourJared/WebJared")
-WORKSPACE = os.environ.get("WORKSPACE", "/workspace")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
+HOST_USER = os.environ.get("HOST_USER", "piotr")
+HOST_IP = os.environ.get("HOST_IP", "host.docker.internal")
+REPO_PATH = os.environ.get("REPO_PATH", f"/home/piotr/projects/WebJared")
 
 HEADERS = {
     "Authorization": f"token {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json"
 }
-
-REPO_DIR = f"{WORKSPACE}/{GITHUB_REPO.split('/')[-1]}"
 
 
 def get_ready_issues():
@@ -40,15 +44,16 @@ def get_ready_issues():
 
 def set_label(issue_number, remove_label, add_label):
     base = f"https://api.github.com/repos/{GITHUB_REPO}/issues/{issue_number}"
-
-    # Remove old label
     requests.delete(f"{base}/labels/{remove_label}", headers=HEADERS)
-
-    # Add new label
     requests.post(f"{base}/labels", headers=HEADERS, json={"labels": [add_label]})
 
 
-def run_claude_code(issue):
+def add_comment(issue_number, message):
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/issues/{issue_number}/comments"
+    requests.post(url, headers=HEADERS, json={"body": message})
+
+
+def run_claude_code_on_host(issue):
     number = issue["number"]
     title = issue["title"]
     body = issue["body"] or ""
@@ -67,15 +72,23 @@ Instructions:
 - Branch name: fix/issue-{number}
 """
 
-    log.info(f"Running Claude Code for issue #{number}: {title}")
+    # Escape prompt for shell
+    escaped_prompt = prompt.replace("'", "'\\''")
+
+    ssh_command = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        f"{HOST_USER}@{HOST_IP}",
+        f"cd {REPO_PATH} && git pull origin main && claude --print '{escaped_prompt}'"
+    ]
+
+    log.info(f"Delegating issue #{number} to Claude Code on host via SSH")
 
     result = subprocess.run(
-        ["claude", "--print", prompt],
-        cwd=REPO_DIR,
-        env={**os.environ, "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY},
+        ssh_command,
         capture_output=True,
         text=True,
-        timeout=600  # 10 min max per issue
+        timeout=600  # 10 min max
     )
 
     if result.returncode != 0:
@@ -86,18 +99,9 @@ Instructions:
     return True
 
 
-def add_comment(issue_number, message):
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/issues/{issue_number}/comments"
-    requests.post(url, headers=HEADERS, json={"body": message})
-
-
-def ensure_repo_up_to_date():
-    subprocess.run(["git", "pull", "origin", "main"], cwd=REPO_DIR, check=True)
-
-
 def main():
     log.info(f"JaredCodingAgent started. Watching {GITHUB_REPO} every {POLL_INTERVAL}s")
-    log.info(f"Workspace: {REPO_DIR}")
+    log.info(f"SSH delegation → {HOST_USER}@{HOST_IP}:{REPO_PATH}")
 
     while True:
         try:
@@ -110,17 +114,12 @@ def main():
                 number = issue["number"]
                 title = issue["title"]
 
-                log.info(f"Picking up issue #{number}: {title}")
+                log.info(f"Picking up #{number}: {title}")
 
-                # Mark as In Progress immediately
                 set_label(number, "Ready", "In Progress")
                 add_comment(number, "🤖 **Jared Coding Agent** picked up this issue and is working on it...")
 
-                # Pull latest before making changes
-                ensure_repo_up_to_date()
-
-                # Run Claude Code
-                success = run_claude_code(issue)
+                success = run_claude_code_on_host(issue)
 
                 if success:
                     set_label(number, "In Progress", "Review")
