@@ -1,18 +1,20 @@
 services:
   jared-coding-agent:
-    build: ./JaredCodingAgent
+    build: .
     container_name: jared-coding-agent
     restart: unless-stopped
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GITHUB_REPO=YourJared/WebJared
-      - WORKSPACE=/workspace
-      - POLL_INTERVAL_SECONDS=60
+      - GITHUB_REPO=${GITHUB_REPO:-YourJared/WebJared}
+      - HOST_USER=${HOST_USER:-juchas}
+      - HOST_IP=${HOST_IP:-172.22.0.1}
+      - REPO_PATH=${REPO_PATH:-/opt/jared/repos/JaredAPIs/WebJared}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-60}
     volumes:
-      - /home/piotr/projects/WebJared:/workspace/WebJared  # repo on host
-      - /home/piotr/.gitconfig:/root/.gitconfig
-      - /home/piotr/.ssh:/root/.ssh:ro
+      - /home/juchas/.gitconfig:/root/.gitconfig
+      - /home/juchas/.ssh:/root/.ssh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     logging:
       driver: "json-file"
       options:
