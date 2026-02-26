@@ -1,0 +1,20 @@
+services:
+  jared-coding-agent:
+    build: ./JaredCodingAgent
+    container_name: jared-coding-agent
+    restart: unless-stopped
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_REPO=YourJared/WebJared
+      - WORKSPACE=/workspace
+      - POLL_INTERVAL_SECONDS=60
+    volumes:
+      - /home/piotr/projects/WebJared:/workspace/WebJared  # repo on host
+      - /home/piotr/.gitconfig:/root/.gitconfig
+      - /home/piotr/.ssh:/root/.ssh:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
