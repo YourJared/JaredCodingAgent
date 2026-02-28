@@ -42,7 +42,6 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Track processed items to avoid re-triggering
 processed = set()
 
 
@@ -60,7 +59,6 @@ def graphql(query, variables=None):
 
 
 def get_ready_items():
-    """Fetch all project items with Status=Ready."""
     query = """
     query($projectId: ID!) {
       node(id: $projectId) {
@@ -82,7 +80,6 @@ def get_ready_items():
                   number
                   title
                   body
-                  url
                 }
               }
             }
@@ -110,7 +107,6 @@ def get_ready_items():
 
 
 def set_status(item_id, option_id):
-    """Update project item status."""
     mutation = """
     mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
       updateProjectV2ItemFieldValue(input: {
@@ -177,12 +173,13 @@ def main():
     log.info(f"JaredCodingAgent started — watching WebJared Project every {POLL_INTERVAL}s")
     log.info(f"SSH delegation → {HOST_USER}@{HOST_IP}:{REPO_PATH}")
 
+    cycle = 0
     while True:
+        cycle += 1
         try:
+            log.info(f"Poll #{cycle} — checking for Ready items...")
             items = get_ready_items()
-
-            if items:
-                log.info(f"Found {len(items)} Ready item(s)")
+            log.info(f"Poll #{cycle} — found {len(items)} Ready item(s)")
 
             for item in items:
                 item_id = item["item_id"]
@@ -191,6 +188,7 @@ def main():
                 body = item["body"]
 
                 if item_id in processed:
+                    log.info(f"Skipping #{number} — already processed this session")
                     continue
 
                 log.info(f"Picking up #{number}: {title}")
@@ -208,7 +206,7 @@ def main():
                     add_comment(number, "❌ **Jared Coding Agent** encountered an error. Check container logs.")
 
         except Exception as e:
-            log.error(f"Poll cycle error: {e}")
+            log.error(f"Poll #{cycle} error: {e}")
 
         time.sleep(POLL_INTERVAL)
 
