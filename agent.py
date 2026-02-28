@@ -28,18 +28,32 @@ log = logging.getLogger(__name__)
 
 # Config
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "YourJared/WebJared")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 HOST_USER = os.environ.get("HOST_USER", "juchas")
 HOST_IP = os.environ.get("HOST_IP", "172.22.0.1")
-REPO_PATH = os.environ.get("REPO_PATH", "/opt/jared/repos/JaredAPIs/WebJared")
 
-# WebJared Project IDs (from GraphQL introspection)
-PROJECT_ID = "PVT_kwDOC5s1AM4BO9Pf"
-STATUS_FIELD_ID = "PVTSSF_lADOC5s1AM4BO9Pfzg9gcHw"
+# Status option IDs (shared across all projects)
 STATUS_READY = "61e4505c"
 STATUS_IN_PROGRESS = "47fc9ee4"
 STATUS_IN_REVIEW = "df73e18b"
+
+# Projects to watch — each has its own project board, repo, and local path
+PROJECTS = [
+    {
+        "name": "WebJared",
+        "project_id": "PVT_kwDOC5s1AM4BO9Pf",
+        "status_field_id": "PVTSSF_lADOC5s1AM4BO9Pfzg9gcHw",
+        "github_repo": "YourJared/WebJared",
+        "repo_path": "/opt/jared/repos/JaredAPIs/WebJared",
+    },
+    {
+        "name": "Jared Backend",
+        "project_id": "PVT_kwDOC5s1AM4BO9XS",
+        "status_field_id": "PVTSSF_lADOC5s1AM4BO9XSzg9ghr8",
+        "github_repo": "YourJared/JaredAPIs",
+        "repo_path": "/opt/jared/repos/JaredAPIs",
+    },
+]
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 HEADERS = {
@@ -64,6 +78,7 @@ def graphql(query, variables=None):
 
 
 def get_ready_items():
+    """Poll all watched projects for items with Status=Ready."""
     query = """
     query($projectId: ID!) {
       node(id: $projectId) {
@@ -93,25 +108,32 @@ def get_ready_items():
       }
     }
     """
-    data = graphql(query, {"projectId": PROJECT_ID})
-    items = data["node"]["items"]["nodes"]
-
     ready = []
-    for item in items:
-        for fv in item["fieldValues"]["nodes"]:
-            if fv.get("field", {}).get("id") == STATUS_FIELD_ID and fv.get("optionId") == STATUS_READY:
-                content = item.get("content")
-                if content and "number" in content:
-                    ready.append({
-                        "item_id": item["id"],
-                        "issue_number": content["number"],
-                        "title": content["title"],
-                        "body": content.get("body") or ""
-                    })
+    for project in PROJECTS:
+        try:
+            data = graphql(query, {"projectId": project["project_id"]})
+            items = data["node"]["items"]["nodes"]
+
+            for item in items:
+                for fv in item["fieldValues"]["nodes"]:
+                    if (fv.get("field", {}).get("id") == project["status_field_id"]
+                            and fv.get("optionId") == STATUS_READY):
+                        content = item.get("content")
+                        if content and "number" in content:
+                            ready.append({
+                                "item_id": item["id"],
+                                "issue_number": content["number"],
+                                "title": content["title"],
+                                "body": content.get("body") or "",
+                                "project": project,
+                            })
+        except Exception as e:
+            log.error(f"Error polling project {project['name']}: {e}")
+
     return ready
 
 
-def set_status(item_id, option_id):
+def set_status(item_id, option_id, project):
     mutation = """
     mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
       updateProjectV2ItemFieldValue(input: {
@@ -125,15 +147,15 @@ def set_status(item_id, option_id):
     }
     """
     graphql(mutation, {
-        "projectId": PROJECT_ID,
+        "projectId": project["project_id"],
         "itemId": item_id,
-        "fieldId": STATUS_FIELD_ID,
+        "fieldId": project["status_field_id"],
         "optionId": option_id
     })
 
 
-def add_comment(issue_number, message):
-    owner, repo = GITHUB_REPO.split("/")
+def add_comment(issue_number, message, github_repo):
+    owner, repo = github_repo.split("/")
     url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments"
     requests.post(
         url,
@@ -142,8 +164,11 @@ def add_comment(issue_number, message):
     )
 
 
-def run_claude_code_on_host(issue_number, title, body):
-    prompt = f"""You are working on the {GITHUB_REPO} repository.
+def run_claude_code_on_host(issue_number, title, body, project):
+    github_repo = project["github_repo"]
+    repo_path = project["repo_path"]
+
+    prompt = f"""You are working on the {github_repo} repository.
 Implement the following GitHub issue completely, then create a pull request.
 
 Issue #{issue_number}: {title}
@@ -162,7 +187,7 @@ Instructions:
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
         f"{HOST_USER}@{HOST_IP}",
-        f"cd {REPO_PATH} && git checkout main && git pull --rebase origin main && /home/{HOST_USER}/.local/bin/claude --print --permission-mode bypassPermissions '{escaped}'"
+        f"cd {repo_path} && git checkout main && git pull --rebase origin main && /home/{HOST_USER}/.local/bin/claude --print --permission-mode bypassPermissions '{escaped}'"
     ]
 
     log.info(f"SSHing to host to run Claude Code for issue #{issue_number}")
@@ -202,18 +227,18 @@ def extract_test_plan(pr_body):
     return items
 
 
-def get_pr_body(pr_number):
+def get_pr_body(pr_number, github_repo):
     """Fetch PR body from GitHub REST API."""
-    owner, repo = GITHUB_REPO.split("/")
+    owner, repo = github_repo.split("/")
     url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
     resp = requests.get(url, headers={"Authorization": f"token {GITHUB_TOKEN}"})
     resp.raise_for_status()
     return resp.json().get("body", "")
 
 
-def append_test_plan(pr_number, pr_title, test_items):
-    """Append test plan items to TEST_PLAN.md in the WebJared repo via GitHub API."""
-    owner, repo = GITHUB_REPO.split("/")
+def append_test_plan(pr_number, pr_title, test_items, github_repo):
+    """Append test plan items to TEST_PLAN.md in the repo via GitHub API."""
+    owner, repo = github_repo.split("/")
     api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/TEST_PLAN.md"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
 
@@ -257,8 +282,9 @@ def append_test_plan(pr_number, pr_title, test_items):
 
 
 def main():
-    log.info(f"JaredCodingAgent started — watching WebJared Project every {POLL_INTERVAL}s")
-    log.info(f"SSH delegation → {HOST_USER}@{HOST_IP}:{REPO_PATH}")
+    project_names = ", ".join(p["name"] for p in PROJECTS)
+    log.info(f"JaredCodingAgent started — watching [{project_names}] every {POLL_INTERVAL}s")
+    log.info(f"SSH delegation → {HOST_USER}@{HOST_IP}")
 
     cycle = 0
     while True:
@@ -273,38 +299,40 @@ def main():
                 number = item["issue_number"]
                 title = item["title"]
                 body = item["body"]
+                project = item["project"]
+                github_repo = project["github_repo"]
 
                 if item_id in processed:
                     log.info(f"Skipping #{number} — already processed this session")
                     continue
 
-                log.info(f"Picking up #{number}: {title}")
+                log.info(f"Picking up [{project['name']}] #{number}: {title}")
                 processed.add(item_id)
 
-                set_status(item_id, STATUS_IN_PROGRESS)
-                add_comment(number, "🤖 **Jared Coding Agent** picked up this issue and is working on it...")
+                set_status(item_id, STATUS_IN_PROGRESS, project)
+                add_comment(number, "🤖 **Jared Coding Agent** picked up this issue and is working on it...", github_repo)
 
-                success, pr_url = run_claude_code_on_host(number, title, body)
+                success, pr_url = run_claude_code_on_host(number, title, body, project)
 
                 if success:
-                    set_status(item_id, STATUS_IN_REVIEW)
+                    set_status(item_id, STATUS_IN_REVIEW, project)
                     if pr_url:
                         pr_num = pr_url.rstrip("/").split("/")[-1]
-                        add_comment(number, f"✅ **Jared Coding Agent** completed implementation.\n🔗 PR #{pr_num}: {pr_url}")
+                        add_comment(number, f"✅ **Jared Coding Agent** completed implementation.\n🔗 PR #{pr_num}: {pr_url}", github_repo)
                         # Collect test plan items into TEST_PLAN.md
                         try:
-                            pr_body = get_pr_body(pr_num)
+                            pr_body = get_pr_body(pr_num, github_repo)
                             test_items = extract_test_plan(pr_body)
                             if test_items:
-                                append_test_plan(int(pr_num), title, test_items)
+                                append_test_plan(int(pr_num), title, test_items, github_repo)
                             else:
                                 log.info(f"No test plan items found in PR #{pr_num}")
                         except Exception as e:
                             log.warning(f"Failed to collect test plan from PR #{pr_num}: {e}")
                     else:
-                        add_comment(number, "✅ **Jared Coding Agent** completed implementation. PR opened for review.")
+                        add_comment(number, "✅ **Jared Coding Agent** completed implementation. PR opened for review.", github_repo)
                 else:
-                    add_comment(number, "❌ **Jared Coding Agent** encountered an error. Check container logs.")
+                    add_comment(number, "❌ **Jared Coding Agent** encountered an error. Check container logs.", github_repo)
 
         except Exception as e:
             log.error(f"Poll #{cycle} error: {e}")
