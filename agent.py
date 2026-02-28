@@ -10,12 +10,12 @@ See ROADMAP.md.
 """
 
 import os
+import re
+import sys
 import time
 import subprocess
 import logging
 import requests
-
-import sys
 
 logging.basicConfig(
     level=logging.INFO,
@@ -170,14 +170,20 @@ Instructions:
         log.error(f"Claude Code failed (exit {result.returncode}):\n{result.stderr}")
         if result.stdout:
             log.error(f"stdout:\n{result.stdout[-2000:]}")
-        return False
+        return False, None
 
-    log.info(f"Claude Code completed for #{issue_number}")
+    # Extract PR URL from output
+    pr_url = None
     if result.stdout:
-        # Log last 2000 chars of output for debugging
+        match = re.search(r'https://github\.com/[^\s)]+/pull/\d+', result.stdout)
+        if match:
+            pr_url = match.group(0)
+
+    log.info(f"Claude Code completed for #{issue_number}, PR: {pr_url}")
+    if result.stdout:
         output_tail = result.stdout[-2000:]
         log.info(f"Claude output (tail):\n{output_tail}")
-    return True
+    return True, pr_url
 
 
 def main():
@@ -208,11 +214,15 @@ def main():
                 set_status(item_id, STATUS_IN_PROGRESS)
                 add_comment(number, "🤖 **Jared Coding Agent** picked up this issue and is working on it...")
 
-                success = run_claude_code_on_host(number, title, body)
+                success, pr_url = run_claude_code_on_host(number, title, body)
 
                 if success:
                     set_status(item_id, STATUS_IN_REVIEW)
-                    add_comment(number, "✅ **Jared Coding Agent** completed implementation. PR opened for review.")
+                    if pr_url:
+                        pr_num = pr_url.rstrip("/").split("/")[-1]
+                        add_comment(number, f"✅ **Jared Coding Agent** completed implementation.\n🔗 PR #{pr_num}: {pr_url}")
+                    else:
+                        add_comment(number, "✅ **Jared Coding Agent** completed implementation. PR opened for review.")
                 else:
                     add_comment(number, "❌ **Jared Coding Agent** encountered an error. Check container logs.")
 
