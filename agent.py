@@ -160,17 +160,23 @@ Instructions:
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
         f"{HOST_USER}@{HOST_IP}",
-        f"cd {REPO_PATH} && git pull origin main && /home/{HOST_USER}/.local/bin/claude --print '{escaped}'"
+        f"cd {REPO_PATH} && git pull origin main && /home/{HOST_USER}/.local/bin/claude --print --permission-mode acceptEdits '{escaped}'"
     ]
 
     log.info(f"SSHing to host to run Claude Code for issue #{issue_number}")
     result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=600)
 
     if result.returncode != 0:
-        log.error(f"Claude Code failed:\n{result.stderr}")
+        log.error(f"Claude Code failed (exit {result.returncode}):\n{result.stderr}")
+        if result.stdout:
+            log.error(f"stdout:\n{result.stdout[-2000:]}")
         return False
 
     log.info(f"Claude Code completed for #{issue_number}")
+    if result.stdout:
+        # Log last 2000 chars of output for debugging
+        output_tail = result.stdout[-2000:]
+        log.info(f"Claude output (tail):\n{output_tail}")
     return True
 
 
