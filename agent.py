@@ -160,7 +160,7 @@ Instructions:
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
         f"{HOST_USER}@{HOST_IP}",
-        f"cd {REPO_PATH} && git pull origin main && /home/{HOST_USER}/.local/bin/claude --print --permission-mode acceptEdits '{escaped}'"
+        f"cd {REPO_PATH} && git pull origin main && /home/{HOST_USER}/.local/bin/claude --print --permission-mode bypassPermissions '{escaped}'"
     ]
 
     log.info(f"SSHing to host to run Claude Code for issue #{issue_number}")
