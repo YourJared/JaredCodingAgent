@@ -157,8 +157,10 @@ Instructions:
     escaped = prompt.replace("'", "'\\''")
     ssh_cmd = [
         "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
         f"{HOST_USER}@{HOST_IP}",
-        f"cd {REPO_PATH} && git pull origin main && claude --print '{escaped}'"
+        f"cd {REPO_PATH} && git pull origin main && /home/{HOST_USER}/.local/bin/claude --print '{escaped}'"
     ]
 
     log.info(f"SSHing to host to run Claude Code for issue #{issue_number}")
