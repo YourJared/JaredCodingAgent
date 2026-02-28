@@ -23,4 +23,6 @@ COPY agent.py .
 RUN git config --global user.email "jared-agent@yourjared.com" && \
     git config --global user.name "Jared Coding Agent"
 
+ENV PYTHONUNBUFFERED=1
+
 CMD ["python3", "agent.py"]
